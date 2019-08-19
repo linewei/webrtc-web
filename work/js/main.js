@@ -20,6 +20,7 @@ var pcConfig = {
 var pcinfo = {
 	sockID:XXX,
 	pc:XXX,
+	stream:XXX
 };
 
 */
