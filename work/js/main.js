@@ -1,6 +1,6 @@
 'use strict';
 
-var isChannelReady = false;
+var isChannelReady = false; //socket.io channel ready
 var isInitiator = false; //socket.io create room
 var isStarted = false;	//local stream added
 let hasRemote = false;	//remote stream added
@@ -10,6 +10,7 @@ var currPc = null;
 var remoteStream1;
 var remoteStream2;
 var turnReady;
+let socketId = null
 
 var pcConfig = {
 	'iceServers': [{
@@ -18,9 +19,11 @@ var pcConfig = {
 };
 /*
 var pcinfo = {
-	sockID:XXX,
-	pc:XXX,
-	stream:XXX
+	sockId:
+				{
+					pc:XXX,
+					stream:XXX
+				}
 };
 
 */
@@ -37,6 +40,10 @@ var room = 'foo';
 // Could prompt for room name:
 // room = prompt('Enter room name:');
 
+var localVideo = document.querySelector('#localVideo');
+var remoteVideo1 = document.querySelector('#remoteVideo1');
+var remoteVideo2 = document.querySelector('#remoteVideo2');
+
 var socket = io.connect();
 
 if (room !== '') {
@@ -47,6 +54,9 @@ if (room !== '') {
 socket.on('created', function(room) {
 	console.log('Created room ' + room);
 	isInitiator = true;
+	isChannelReady = true;
+	
+	getLocalStream();
 });
 
 socket.on('full', function(room) {
@@ -56,12 +66,16 @@ socket.on('full', function(room) {
 socket.on('join', function (room){
 	console.log('Another peer made a request to join room ' + room);
 	console.log('This peer is the initiator of room ' + room + '!');
-	isChannelReady = true;
+//	isChannelReady = true;
 });
 
-socket.on('joined', function(room) {
-	console.log('joined: ' + room);
+socket.on('joined', function(room,socketid) {
+	console.log('socketId ' + socketid+ 'joined: ' + room);
+	socketId = socketid;
 	isChannelReady = true;
+
+	getLocalStream();
+	maybeStart();
 });
 
 socket.on('log', function(array) {
@@ -72,6 +86,7 @@ socket.on('log', function(array) {
 
 function sendMessage(message) {
 	console.log('Client sending message: ', message);
+	message.socketId = socketId;
 	socket.emit('message', message);
 }
 
@@ -109,35 +124,23 @@ socket.on('message', function(message) {
 });
 
 ////////////////////////////////////////////////////
+function getLocalStream(){
+				navigator.mediaDevices.getUserMedia({
+					audio: false,
+					video: true
+				})
+					.then(gotStream)
+					.catch(function(e) {
+						alert('getUserMedia() error: ' + e.name);
+					});
 
-var localVideo = document.querySelector('#localVideo');
-var remoteVideo1 = document.querySelector('#remoteVideo1');
-var remoteVideo2 = document.querySelector('#remoteVideo2');
-
-navigator.mediaDevices.getUserMedia({
-	audio: false,
-	video: true
-})
-	.then(gotStream)
-	.catch(function(e) {
-		alert('getUserMedia() error: ' + e.name);
-	});
-
-function gotStream(stream) {
-	console.log('Adding local stream.');
-	localStream = stream;
-	localVideo.srcObject = stream;
-	sendMessage('got user media');
-	if (isInitiator) {
-		maybeStart();
-	}
+				function gotStream(stream) {
+					console.log('Adding local stream.');
+					localStream = stream;
+					localVideo.srcObject = stream;
+					sendMessage('got user media');
+				}
 }
-
-var constraints = {
-	video: true
-};
-
-console.log('Getting user media with constraints', constraints);
 
 if (location.hostname !== 'localhost') {
 	requestTurn(
@@ -146,19 +149,16 @@ if (location.hostname !== 'localhost') {
 }
 
 function maybeStart() {
-	console.log('>>>>>>> maybeStart() ', isStarted, localStream, isChannelReady);
-	if (!isStarted && typeof localStream !== 'undefined' && isChannelReady) {
+	console.log('>>>>>>> maybeStart() ', isStarted, localStream);
+	if (!isStarted && typeof localStream !== 'undefined') {
 		console.log('>>>>>> creating peer connection');
 		createPeerConnection();
 		currPc.addStream(localStream);
 		isStarted = true;
-		console.log('isInitiator', isInitiator);
-		if (isInitiator) {
-			doCall();
-		}
-	}
-	else if(isStarted && isInitiator){
 		doCall();
+	}
+	else{
+		console.log("maybeStart do nothing!");
 	}
 }
 
