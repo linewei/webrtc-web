@@ -10,6 +10,8 @@ var app = http.createServer(function(req, res) {
   fileServer.serve(req, res);
 }).listen(8080);
 
+console.log("Listening 8080.");
+
 var io = socketIO.listen(app);
 io.sockets.on('connection', function(socket) {
 
@@ -21,10 +23,10 @@ io.sockets.on('connection', function(socket) {
 	console.log(...array);
   }
 
-  socket.on('message', function(message) {
+  socket.on('message', function(message,fromId,toId) {
     log('Client ID ' + socket.id + ' said: ', message);
     // for a real app, would be room-only (not broadcast)
-    socket.broadcast.emit('message', message);
+	  socket.broadcast.emit('message', message,fromId,toId);
   });
 
   socket.on('create or join', function(room) {

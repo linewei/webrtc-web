@@ -3,30 +3,18 @@
 var isChannelReady = false; //socket.io channel ready
 var isInitiator = false; //socket.io create room
 var isStarted = false;	//local stream added
-let hasRemote = false;	//remote stream added
 var localStream;
-var pcs = [];
-var currPc = null;
 var remoteStream1;
 var remoteStream2;
 var turnReady;
-let socketId = null
+let localSocketId = null
+var socketArray = []; 
 
 var pcConfig = {
 	'iceServers': [{
 		'urls': 'stun:stun.l.google.com:19302'
 	}]
 };
-/*
-var pcinfo = {
-	sockId:
-				{
-					pc:XXX,
-					stream:XXX
-				}
-};
-
-*/
 
 // Set up audio and video regardless of what devices are present.
 var sdpConstraints = {
@@ -51,11 +39,12 @@ if (room !== '') {
 	console.log('Attempted to create or  join room', room);
 }
 
-socket.on('created', function(room) {
+socket.on('created', function(room,id) {
 	console.log('Created room ' + room);
 	isInitiator = true;
 	isChannelReady = true;
 	
+	localSocketId = id;
 	getLocalStream();
 });
 
@@ -65,81 +54,117 @@ socket.on('full', function(room) {
 
 socket.on('join', function (room){
 	console.log('Another peer made a request to join room ' + room);
-	console.log('This peer is the initiator of room ' + room + '!');
-//	isChannelReady = true;
 });
 
-socket.on('joined', function(room,socketid) {
-	console.log('socketId ' + socketid+ 'joined: ' + room);
-	socketId = socketid;
-	isChannelReady = true;
+socket.on('joined', function(room,id) {
+	console.log('socketId ' + id + 'joined: ' + room);
+	localSocketId = id;
 
 	getLocalStream();
-	maybeStart();
+	sendMessage('got user media','all');
 });
 
 socket.on('log', function(array) {
-	console.log.apply(console, array);
+//	console.log.apply(console, array);
 });
 
 ////////////////////////////////////////////////
 
-function sendMessage(message) {
-	console.log('Client sending message: ', message);
-	message.socketId = socketId;
-	socket.emit('message', message);
+function sendMessage(message,toId) {
+	let id = toId || 'all';
+	socket.emit('message', message,localSocketId,id);
 }
 
 // This client receives a message
-socket.on('message', function(message) {
-	console.log('Client received message:', message);
+socket.on('message', function(message,fromId,toId) {
+	if((toId != 'all') && (toId != localSocketId)){
+		console.log('receive message from ' + fromId + ' to ' + toId);
+		return;
+	}
+
+	var sh = getSocketArray(fromId);
+
+	if(sh.pc && (sh.pc.connectionState == 'connected')){
+		if (message === 'bye') 
+			handleRemoteHangup(sh.pc);
+
+		return;
+	}
+
 	if (message === 'got user media') {
-		maybeStart();
-	} else if (message.type === 'offer') {
-		if (!isInitiator && !isStarted) {
-			maybeStart();
+		if(!sh.pc){
+			sh.pc = maybeStart();
 		}
-		try{
-			currPc.setRemoteDescription(new RTCSessionDescription(message));
-		}catch(e){
-			console.log(e);
+		doCall(sh);
+	} else if (message.type === 'offer') {
+		console.log("receive offer from :", fromId);
+		if(!sh.pc){
+			sh.pc = maybeStart();
+		}
+		sh.pc.setRemoteDescription(new RTCSessionDescription(message));
+
+		doAnswer(sh);
+	} else if (message.type === 'answer') {
+		console.log("receive answer from :", fromId);
+		sh.pc.setRemoteDescription(new RTCSessionDescription(message));
+	} else if (message.type === 'candidate') {
+		console.log("receive candidate from :", fromId);
+		if(!sh.pc){
+			sh.pc = maybeStart();
 		}
 
-		doAnswer();
-	} else if (message.type === 'answer' && isStarted) {
-		try{
-			currPc.setRemoteDescription(new RTCSessionDescription(message));
-		}catch(e){
-			console.log(e);
-		}
-	} else if (message.type === 'candidate' && isStarted) {
 		var candidate = new RTCIceCandidate({
 			sdpMLineIndex: message.label,
 			candidate: message.candidate
 		});
-		currPc.addIceCandidate(candidate);
-	} else if (message === 'bye' && isStarted) {
-		handleRemoteHangup();
+		sh.pc.addIceCandidate(candidate);
+	}else{
+		console.error("Nothing do with: " , sh);
 	}
 });
 
 ////////////////////////////////////////////////////
 function getLocalStream(){
-				navigator.mediaDevices.getUserMedia({
-					audio: false,
-					video: true
-				})
-					.then(gotStream)
-					.catch(function(e) {
-						alert('getUserMedia() error: ' + e.name);
-					});
+	navigator.mediaDevices.getUserMedia({
+		audio: false,
+		video: true
+	})
+		.then(gotStream)
+		.catch(function(e) {
+			alert('getUserMedia() error: ' + e.name);
+		});
 
-				function gotStream(stream) {
-					console.log('Adding local stream.');
-					localStream = stream;
-					localVideo.srcObject = stream;
-					sendMessage('got user media');
-				}
+	function gotStream(stream) {
+		console.log('Adding local stream.');
+		localStream = stream;
+		localVideo.srcObject = stream;
+	}
+}
+
+function getSocketArray(id){
+	for(let arr of socketArray){
+		if(arr.id == id){
+			return arr;
+		}
+	}
+
+	let tmpArr = {
+		id:id,
+		pc:null,
+	};
+
+	socketArray.push(tmpArr);
+	return tmpArr;
+}
+
+function getSocketArrayBypc(pc){
+	for(let arr of socketArray){
+		if(arr.pc == pc){
+			return arr;
+		}
+	}
+
+	return null;
 }
 
 if (location.hostname !== 'localhost') {
@@ -149,17 +174,10 @@ if (location.hostname !== 'localhost') {
 }
 
 function maybeStart() {
-	console.log('>>>>>>> maybeStart() ', isStarted, localStream);
-	if (!isStarted && typeof localStream !== 'undefined') {
-		console.log('>>>>>> creating peer connection');
-		createPeerConnection();
-		currPc.addStream(localStream);
-		isStarted = true;
-		doCall();
-	}
-	else{
-		console.log("maybeStart do nothing!");
-	}
+	console.log('>>>>>> maybeStart() creating peer connection');
+	var pc = createPeerConnection();
+	pc.addStream(localStream);
+	return pc;
 }
 
 window.onbeforeunload = function() {
@@ -169,23 +187,16 @@ window.onbeforeunload = function() {
 /////////////////////////////////////////////////////////
 
 function createPeerConnection() {
-	try {
-		var pc = new RTCPeerConnection(null);
-		pc.onicecandidate = handleIceCandidate;
-		pc.onaddstream = handleRemoteStreamAdded;
-		pc.onremovestream = handleRemoteStreamRemoved;
-		console.log('Created RTCPeerConnnection');
-		pcs.push(pc);
-		currPc = pc;
-	} catch (e) {
-		console.log('Failed to create PeerConnection, exception: ' + e.message);
-		alert('Cannot create RTCPeerConnection object.');
-		return;
-	}
+	var pc = new RTCPeerConnection(null);
+	pc.onicecandidate = handleIceCandidate;
+	pc.onaddstream = handleRemoteStreamAdded;
+	pc.onremovestream = handleRemoteStreamRemoved;
+	console.log('Created RTCPeerConnnection');
+	return pc;
 }
 
 function handleIceCandidate(event) {
-	console.log('icecandidate event: ', event);
+	console.log('handleIceCandidate icecandidate event: ', event);
 	if (event.candidate) {
 		sendMessage({
 			type: 'candidate',
@@ -202,23 +213,22 @@ function handleCreateOfferError(event) {
 	console.log('createOffer() error: ', event);
 }
 
-function doCall() {
-	console.log('Sending offer to peer');
-	currPc.createOffer(setLocalAndSendMessage, handleCreateOfferError);
+function doCall(sh) {
+	console.log('doCall Sending offer to peer');
+	sh.pc.createOffer().then(function(offer){
+		sh.pc.setLocalDescription(offer);
+		console.log('doCall sending message', offer);
+		sendMessage(offer,sh.id);
+	}).catch(onCreateSessionDescriptionError);
 }
 
-function doAnswer() {
-	console.log('Sending answer to peer.');
-	currPc.createAnswer().then(
-		setLocalAndSendMessage,
-		onCreateSessionDescriptionError
-	);
-}
-
-function setLocalAndSendMessage(sessionDescription) {
-	currPc.setLocalDescription(sessionDescription);
-	console.log('setLocalAndSendMessage sending message', sessionDescription);
-	sendMessage(sessionDescription);
+function doAnswer(sh) {
+	console.log('doAnswer Sending answer to peer.');
+	sh.pc.createAnswer().then(function(answer){
+		sh.pc.setLocalDescription(answer);
+		console.log('doAnswer sending message', answer);
+		sendMessage(answer,sh.id);
+	}).catch(onCreateSessionDescriptionError);
 }
 
 function onCreateSessionDescriptionError(error) {
@@ -265,28 +275,17 @@ function handleRemoteStreamAdded(event) {
 		remoteStream2 = remoteStream;
 		remoteVideo2.srcObject = remoteStream;
 	}
-
-	hasRemote = true;
 }
 
 function handleRemoteStreamRemoved(event) {
 	console.log('Remote stream removed. Event: ', event);
 }
 
-function hangup() {
-	console.log('Hanging up.');
-	stop();
-	sendMessage('bye');
-}
-
-function handleRemoteHangup() {
+function handleRemoteHangup(pc) {
 	console.log('Session terminated.');
-	stop();
-	isInitiator = false;
+	stop(pc);
 }
 
-function stop() {
-	isStarted = false;
-	currPc.close();
-	currPc = null;
+function stop(pc) {
+	pc.close();
 }
