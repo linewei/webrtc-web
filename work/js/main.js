@@ -157,16 +157,6 @@ function getSocketArray(id){
 	return tmpArr;
 }
 
-function getSocketArrayBypc(pc){
-	for(let arr of socketArray){
-		if(arr.pc == pc){
-			return arr;
-		}
-	}
-
-	return null;
-}
-
 if (location.hostname !== 'localhost') {
 	requestTurn(
 		'https://computeengineondemand.appspot.com/turn?username=41784574&key=4080218913'
